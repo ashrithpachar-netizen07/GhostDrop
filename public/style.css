@@ -38,3 +38,4 @@ header{display:flex;justify-content:space-between;align-items:center;flex-wrap:w
 .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--lime);color:#0d0f14;font-weight:600;padding:10px 18px;border-radius:10px;z-index:9;animation:up .35s}.toast.bad{background:var(--coral);color:#fff}
 @keyframes up{from{opacity:0;transform:translate(-50%,20px)}}
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+.err{color:var(--coral);font-size:.85rem;min-height:1.3em;margin:4px 0;text-align:left}a{color:var(--lime)}button:disabled{opacity:.5;cursor:wait;transform:none}
