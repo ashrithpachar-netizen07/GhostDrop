@@ -46,7 +46,7 @@ app.post('/api/upload',auth,(q,s,n)=>up.single('file')(q,s,async e=>{try{
 const state=l=>l.revoked?'revoked':l.expires<=Date.now()?'expired':l.max_dl&&l.downloads>=l.max_dl?'exhausted':'active';
 app.get('/api/files',auth,async(q,s)=>{const out=[];
  for(const f of await Q('select id,name,size,created from files where user_id=? and deleted=0 order by id desc',[q.uid]))
-  out.push({id:f.id,name:f.name,size:f.size,created:f.created,links:(await Q('select id,expires,max_dl,downloads,revoked,pw is not null locked from links where file_id=? order by id desc',[f.id])).map(l=>({id:l.id,expires:l.expires,max_dl:l.max_dl,downloads:l.downloads,locked:l.locked,state:state(l)}))});
+  out.push({id:f.id,name:f.name,size:f.size,created:f.created,links:(await Q('select id,expires,created,max_dl,downloads,revoked,pw is not null locked from links where file_id=? order by id desc',[f.id])).map(l=>({id:l.id,expires:l.expires,created:l.created,max_dl:l.max_dl,downloads:l.downloads,locked:l.locked,state:state(l)}))});
  s.json(out)});
 const own=(q)=>one('select id from files where id=? and user_id=? and deleted=0',[+q.params.id,q.uid]);
 app.delete('/api/files/:id',auth,async(q,s)=>{const f=await own(q);if(!f)return s.status(404).json({error:'Not found'});
