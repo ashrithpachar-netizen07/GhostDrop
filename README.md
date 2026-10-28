@@ -21,6 +21,7 @@ Upload: auth → multer (memory, hard 10 MB cap) → type/magic-byte/quota check
 - Rate limits; login lockout (5 fails → 15 min); per-link password brute-force lockout; constant-time-ish login (no user enumeration)
 - Ownership check on every owner route (other users get 404); UI output escaped; `X-Robots-Tag: noindex` on links
 - Orphaned uploads purged hourly
+- **Email verification:** accounts stay inactive until the emailed link (24 h, single-use, hash-stored) is confirmed; confirm is a button+POST so mail scanners can't consume it; unverified accounts can be re-claimed by the real owner and are purged after 24 h; resend has a cooldown and a generic response (no enumeration)
 - Clear 404/410 messages: expired, revoked, limit reached, deleted
 
 ## Deploy (100% free, no card)
@@ -29,4 +30,7 @@ Upload: auth → multer (memory, hard 10 MB cap) → type/magic-byte/quota check
 3. Env vars: `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`, `JWT_SECRET=<long random>`, `NODE_ENV=production`.
 4. Free Render sleeps after ~15 min idle (first load ~30–60 s). Optional: free UptimeRobot ping on `/healthz` every 5 min.
 
-Live URL: https://ghostdrop-g2p4.onrender.com
+### Email verification setup (free)
+Brevo → Senders & IP → add + verify a sender email → SMTP & API → create an **API key**. Render env vars: `BREVO_API_KEY`, `MAIL_FROM` (the verified sender). Uses Brevo's HTTPS API because free Render blocks SMTP ports. Without these vars, production sign-up fails safely; locally the link is printed to the console.
+
+Live URL: _add here_

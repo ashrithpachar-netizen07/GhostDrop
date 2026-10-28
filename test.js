@@ -3,6 +3,8 @@ const {test,before,after}=require('node:test'),assert=require('node:assert'),{sp
 const D=fs.mkdtempSync(path.join(os.tmpdir(),'gd-')),B='http://localhost:3222',H={'X-Requested-With':'ghostdrop'};
 let srv;const J=(b)=>({method:'POST',headers:{...H,'Content-Type':'application/json'},body:JSON.stringify(b)});
 const who=()=>{let c='';return{async f(u,o={}){const r=await fetch(B+u,{...o,headers:{...H,...o.headers,cookie:c}});const s=r.headers.getSetCookie?.()[0];if(s)c=s.split(';')[0];return r},j:async function(u,o){const r=await this.f(u,o);return[r.status,await r.json().catch(()=>({}))]}}};
+const tok=async e=>(await (await fetch(B+'/api/_test/token?email='+encodeURIComponent(e.trim().toLowerCase()))).json()).token;
+const signup=async(w,e,p)=>{const[s]=await w.j('/api/register',J({email:e,password:p}));return s!==200?s:(await w.j('/api/verify',J({token:await tok(e)})))[0]};
 const up=(u,data,name)=>{const f=new FormData();f.append('file',new Blob([data]),name);return u.j('/api/upload',{method:'POST',body:f})};
 before(async()=>{srv=spawn('node',['server.js'],{env:{...process.env,PORT:3222,DATA_DIR:D,NODE_ENV:'test'}});await new Promise(r=>setTimeout(r,1500))});
 after(()=>srv.kill());
@@ -10,8 +12,8 @@ test('full flow + enforcement',async()=>{
  const a=who(),b=who();
  assert.equal((await a.j('/api/me'))[0],401);
  assert.equal((await fetch(B+'/api/register',{method:'POST'})).status,403,'CSRF header required');
- assert.equal((await a.j('/api/register',J({email:'a@x.io',password:'Ghost-pass9'})))[0],200);
- assert.equal((await b.j('/api/register',J({email:'b@x.io',password:'Ghost-pass9'})))[0],200);
+ assert.equal(await signup(a,'a@x.io','Ghost-pass9'),200);
+ assert.equal(await signup(b,'b@x.io','Ghost-pass9'),200);
  assert.equal((await up(a,'hello','h.txt'))[0],200);
  assert.equal((await up(a,'x','evil.exe'))[0],415,'blocked extension');
  assert.equal((await up(a,'MZ\x90\x00','innocent.txt'))[0],415,'magic-byte exe disguised as txt');
@@ -42,7 +44,7 @@ test('full flow + enforcement',async()=>{
 test('validation & edge cases',async()=>{
  const bad=[],chk=(l,g,w)=>{if(g!==w)bad.push(`${l}: got ${g}, want ${w}`)},P='Ghost-pass9';
  const a=who(),reg=(e,p=P)=>a.j('/api/register',J({email:e,password:p})),st=async x=>(await x)[0];
- chk('first signup',await st(reg('Dup@Gmail.com')),200);
+ chk('first signup',await signup(who(),'Dup@Gmail.com',P),200);
  for(const e of ['dup@gmail.com',' DUP@gmail.com ','d.u.p@gmail.com','dup+promo@gmail.com','dup@googlemail.com'])chk('duplicate '+e,await st(reg(e,'Other-pass7')),409);
  for(const e of ['abc','abc@','@x.com','a@b','a@b.c','a b@x.com','a..b@x.com','.a@x.com','a.@x.com','a@-x.com','a@x..com','x@example.com','x@site.test',`${'a'.repeat(65)}@x.com`,`a@${'b'.repeat(250)}.com`,'a@x.com,b@x.com'])chk('invalid email '+e.slice(0,22),await st(reg(e)),400);
  for(const [l,b] of [['email array',{email:['ok1@x.io'],password:P}],['email object',{email:{},password:P}],['email number',{email:5,password:P}],['password array',{email:'ok2@x.io',password:[P]}]])chk(l,await st(a.j('/api/register',J(b))),400);
@@ -52,7 +54,7 @@ test('validation & edge cases',async()=>{
  chk('login password object',await st(a.j('/api/login',J({email:'ok4@x.io',password:{}}))),400);
  chk('login wrong password',await st(a.j('/api/login',J({email:'ok4@x.io',password:'nope-nope1'}))),401);
  chk('tampered cookie',(await fetch(B+'/api/me',{headers:{cookie:'t=garbage'}})).status,401);
- const u=who();await u.j('/api/register',J({email:'u1@x.io',password:P}));
+ const u=who();await signup(u,'u1@x.io',P);
  chk('upload normal',(await up(u,'data','f.txt'))[0],200);
  const fid=(await u.j('/api/files'))[1][0].id,mk=b=>u.j(`/api/files/${fid}/links`,J(b));
  for(const [l,b] of [['hours 0',{hours:0}],['hours -5',{hours:-5}],['hours abc',{hours:'abc'}],['hours 999',{hours:999}],['hours 1.5',{hours:1.5}],['maxDl 0',{maxDl:0}],['maxDl -1',{maxDl:-1}],['maxDl x',{maxDl:'x'}],['maxDl 101',{maxDl:101}],['maxDl 1.5',{maxDl:1.5}],['pw 101 chars',{password:'p'.repeat(101)}],['pw object',{password:{}}]])chk('link '+l,await st(mk(b)),400);
@@ -70,8 +72,37 @@ test('validation & edge cases',async()=>{
  const tok=(await u.j(`/api/files/${f2}/links`,J({maxDl:1})))[1].url.split('/d/')[1];
  const rs=await Promise.all(Array.from({length:6},()=>fetch(`${B}/api/s/${tok}/download`,J({}))));
  const codes=rs.map(r=>r.status).sort().join();chk('6 parallel downloads on max=1',codes,'200,410,410,410,410,410');
- const q=who();await q.j('/api/register',J({email:'q1@x.io',password:P}));const r=[];
+ const q=who();await signup(q,'q1@x.io',P);const r=[];
  for(let i=0;i<6;i++)r.push((await up(q,Buffer.alloc(9*1048576,65),`b${i}.bin`))[0]);
  chk('quota: 5 fit, 6th rejected',r.join(),'200,200,200,200,200,413');
+ assert.deepEqual(bad,[],'\nFAILURES:\n'+bad.join('\n'));
+});
+
+test('email verification',async()=>{
+ const bad=[],chk=(l,g,w)=>{if(g!==w)bad.push(`${l}: got ${g}, want ${w}`)},P='Ghost-pass9',a=who(),J2=(u,b)=>a.j(u,J(b)),E='v1@x.io';
+ chk('register ok',(await J2('/api/register',{email:E,password:P}))[0],200);
+ chk('no session before verify',(await a.j('/api/me'))[0],401);
+ chk('login blocked until verified',(await J2('/api/login',{email:E,password:P}))[0],403);
+ chk('wrong password still 401 (no leak)',(await J2('/api/login',{email:E,password:'Nope-pass1'}))[0],401);
+ const t1=await tok(E);
+ chk('resend unknown email: generic 200',(await J2('/api/resend',{email:'nobody@x.io'}))[0],200);
+ chk('resend ok',(await J2('/api/resend',{email:E}))[0],200);
+ const t2=await tok(E);chk('resend issues new token',t1!==t2,true);
+ chk('old token dead',(await J2('/api/verify',{token:t1}))[0],400);
+ chk('garbage token',(await J2('/api/verify',{token:'x'.repeat(500)}))[0],400);
+ chk('non-string token',(await J2('/api/verify',{token:['a']}))[0],400);
+ chk('verify ok',(await J2('/api/verify',{token:t2}))[0],200);
+ chk('session after verify',(await a.j('/api/me'))[0],200);
+ chk('token is single-use',(await J2('/api/verify',{token:t2}))[0],400);
+ chk('verified duplicate blocked',(await J2('/api/register',{email:E,password:P}))[0],409);
+ const w=who(),E2='v2@x.io';
+ await w.j('/api/register',J({email:E2,password:'Squat-pass1'}));
+ chk('squatter: re-register unverified ok',(await w.j('/api/register',J({email:E2,password:'Real-pass2'})))[0],200);
+ chk('real owner verifies',(await w.j('/api/verify',J({token:await tok(E2)})))[0],200);
+ chk('squatter password dead',(await who().j('/api/login',J({email:E2,password:'Squat-pass1'})))[0],401);
+ chk('owner password works',(await who().j('/api/login',J({email:E2,password:'Real-pass2'})))[0],200);
+ const E3='v3@x.io';await a.j('/api/register',J({email:E3,password:P}));const t3=await tok(E3);
+ await require('@libsql/client').createClient({url:'file:'+path.join(D,'db.sqlite')}).execute("update users set vexp=1 where email='v3@x.io'");
+ chk('expired token',(await a.j('/api/verify',J({token:t3})))[0],400);
  assert.deepEqual(bad,[],'\nFAILURES:\n'+bad.join('\n'));
 });

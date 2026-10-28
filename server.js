@@ -16,7 +16,7 @@ const ready=(async()=>{await db.batch([
  'create table if not exists users(id integer primary key,email text unique,pw text,canon text)',
  'create table if not exists files(id integer primary key,user_id int,name text,size int,data blob,deleted int default 0,created int)',
  'create table if not exists links(id integer primary key,file_id int,hash text unique,expires int,max_dl int,pw text,downloads int default 0,revoked int default 0,created int)'],'write');
- try{await run('alter table users add column canon text')}catch{}
+ for(const c of ['canon text','verified int','vhash text','vexp int'])try{await run('alter table users add column '+c)}catch{}
  await run('create unique index if not exists users_canon on users(canon)');
  for(const u of await Q('select id,email from users where canon is null'))try{await run('update users set canon=? where id=?',[canon(u.email),u.id])}catch{}
 })();
@@ -34,18 +34,42 @@ const lim=(m,n)=>rateLimit({windowMs:m*60000,limit:process.env.NODE_ENV==='test'
 const auth=(q,s,n)=>{try{q.uid=jwt.verify(q.cookies.t,SECRET).uid;n()}catch{s.status(401).json({error:'Please log in'})}};
 const sign=(s,id)=>s.cookie('t',jwt.sign({uid:Number(id)},SECRET,{expiresIn:'7d'}),{httpOnly:true,sameSite:'strict',secure:process.env.NODE_ENV==='production',maxAge:6048e5});
 const used=async u=>Number((await one('select coalesce(sum(size),0) n from files where user_id=? and deleted=0',[u])).n);
+// ---- email verification (Brevo HTTP API; free Render blocks SMTP ports)
+const TOK=new Map(),cool=new Map();
+if(process.env.NODE_ENV==='test')app.get('/api/_test/token',(q,s)=>s.json({token:TOK.get(String(q.query.email||'').toLowerCase())}));
+const issue=async(uid,to)=>{const t=crypto.randomBytes(24).toString('base64url');
+ await run('update users set vhash=?,vexp=? where id=?',[sha(t),Date.now()+864e5,uid]);
+ const link=`${process.env.BASE_URL||process.env.RENDER_EXTERNAL_URL||'http://localhost:'+(process.env.PORT||3000)}/verify/${t}`;
+ if(process.env.NODE_ENV==='test')TOK.set(to,t);
+ if(!process.env.BREVO_API_KEY||!process.env.MAIL_FROM){if(process.env.NODE_ENV==='production')throw new Error('BREVO_API_KEY / MAIL_FROM not set');console.log('[dev] verify link:',link);return}
+ const r=await fetch('https://api.brevo.com/v3/smtp/email',{method:'POST',headers:{'api-key':process.env.BREVO_API_KEY,'content-type':'application/json',accept:'application/json'},
+  body:JSON.stringify({sender:{name:'Ghostdrop',email:process.env.MAIL_FROM},to:[{email:to}],subject:'Confirm your Ghostdrop account',
+   htmlContent:`<div style="font-family:sans-serif"><h2>👻 Ghostdrop</h2><p>Confirm your email to activate your account:</p><p><a href="${link}" style="background:#c6ff3d;color:#0d0f14;padding:10px 18px;border-radius:8px;text-decoration:none;font-weight:bold">Confirm email</a></p><p>This link expires in 24 hours. If you didn't sign up, ignore this email.</p></div>`})});
+ if(!r.ok)throw new Error('Brevo '+r.status+' '+await r.text())};
+setInterval(()=>run('delete from users where verified=0 and vexp<?',[Date.now()]).catch(()=>{}),36e5).unref();
 // ---- auth
 app.post('/api/register',lim(15,20),async(q,s)=>{const b=q.body||{},e=normEmail(b.email),pe=pwErr(b.password);
  if(!validEmail(e))return s.status(400).json({error:'Please enter a valid email address'});
  if(pe)return s.status(400).json({error:pe});
- const c=canon(e);if(await one('select 1 from users where canon=? or email=?',[c,e]))return s.status(409).json({error:'An account with this email already exists'});
- try{const r=await run('insert into users(email,pw,canon) values(?,?,?)',[e,bcrypt.hashSync(b.password,10),c]);sign(s,r.lastInsertRowid);s.json({ok:1})}
- catch(x){if(/UNIQUE|constraint/i.test(String(x.message)))return s.status(409).json({error:'An account with this email already exists'});throw x}});
+ const c=canon(e),ex=await one('select id,verified from users where canon=? or email=?',[c,e]),h=bcrypt.hashSync(b.password,10),dup=()=>s.status(409).json({error:'An account with this email already exists'});
+ let id;
+ if(ex){if(ex.verified!==0)return dup();await run('update users set email=?,pw=?,canon=? where id=?',[e,h,c,ex.id]);id=ex.id}  // unverified accounts can be reclaimed by the real owner
+ else try{id=Number((await run('insert into users(email,pw,canon,verified) values(?,?,?,0)',[e,h,c])).lastInsertRowid)}catch(x){if(/UNIQUE|constraint/i.test(String(x.message)))return dup();throw x}
+ try{await issue(id,e)}catch(x){console.error(x);return s.status(502).json({error:'Could not send the confirmation email. Please try again.'})}
+ s.json({ok:1,verify:true})});
+app.post('/api/verify',lim(15,30),async(q,s)=>{const t=(q.body||{}).token;
+ const u=typeof t==='string'&&t.length<100?await one('select id from users where vhash=? and vexp>?',[sha(t),Date.now()]):null;
+ if(!u)return s.status(400).json({error:'This confirmation link is invalid or has expired. Sign up again to get a new one.'});
+ await run('update users set verified=1,vhash=null,vexp=null where id=?',[u.id]);sign(s,u.id);s.json({ok:1})});
+app.post('/api/resend',lim(15,10),async(q,s)=>{const e=normEmail((q.body||{}).email),u=e&&await one('select id,verified from users where email=?',[e]);
+ if(u&&u.verified===0&&!(cool.get(e)>Date.now())){cool.set(e,Date.now()+6e4);try{await issue(u.id,e)}catch(x){console.error(x)}}
+ s.json({ok:1})});  // always the same answer: no account enumeration
 app.post('/api/login',lim(15,20),async(q,s)=>{const b=q.body||{},e=normEmail(b.email),k='u:'+e;
  if(!e||typeof b.password!=='string'||b.password.length>128)return s.status(400).json({error:'Email and password required'});
  const u=await one('select * from users where email=?',[e]);
  if(locked(k))return s.status(429).json({error:'Too many failed attempts. Try again in 15 minutes.'});
  if(!bcrypt.compareSync(b.password,u?u.pw:DUMMY)||!u){fail(k);return s.status(401).json({error:'Wrong email or password'})}
+ if(u.verified===0)return s.status(403).json({error:'Please confirm your email first — check your inbox.',unverified:true});
  fails.delete(k);sign(s,u.id);s.json({ok:1})});
 app.post('/api/logout',(q,s)=>{s.clearCookie('t');s.json({ok:1})});
 app.get('/api/me',auth,async(q,s)=>{const u=await one('select email from users where id=?',[q.uid]);if(!u)return s.status(401).json({error:'Please log in'});s.json({email:u.email,used:await used(q.uid),quota:QUOTA,maxFile:MAX_FILE})});
@@ -90,6 +114,7 @@ app.post('/api/s/:t/download',lim(1,10),async(q,s)=>{const l=await gate(q,s);if(
  if(!(await run('update links set downloads=downloads+1 where id=? and (max_dl is null or downloads<max_dl)',[l.id])).rowsAffected)return s.status(410).json({error:MSG.exhausted});
  const buf=Buffer.from((await one('select data from files where id=?',[l.file_id])).data);
  s.attachment(l.name);s.set({'Content-Type':'application/octet-stream','Content-Length':buf.length,'X-Content-Type-Options':'nosniff'});s.end(buf)});
+app.get('/verify/:t',(q,s)=>s.set('X-Robots-Tag','noindex').sendFile(path.join(__dirname,'public/index.html')));
 app.get('/d/:t',(q,s)=>s.set('X-Robots-Tag','noindex').sendFile(path.join(__dirname,'public/index.html')));
 app.use((e,q,s,n)=>{console.error(e);s.status(500).json({error:'Server error'})});
 ready.then(()=>app.listen(process.env.PORT||3000,()=>console.log('Ghostdrop up')));

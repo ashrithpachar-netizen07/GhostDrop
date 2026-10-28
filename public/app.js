@@ -8,7 +8,7 @@ const left=ms=>{const s=Math.max(0,Math.floor((ms-Date.now())/1000)),d=Math.floo
 const icon=n=>/\.(png|jpe?g|gif|webp)$/i.test(n)?'🖼️':/\.pdf$/i.test(n)?'📕':/\.(zip|rar|7z|tar|gz)$/i.test(n)?'🗜️':/\.(mp3|wav|mp4|mov|mkv)$/i.test(n)?'🎞️':/\.(docx?|txt|md|pptx?)$/i.test(n)?'📝':/\.(xlsx?|csv)$/i.test(n)?'📊':'📄';
 setInterval(()=>{document.querySelectorAll('[data-e]').forEach(e=>{const x=+e.dataset.e-Date.now();if(e.tagName=='I')e.style.width=Math.max(0,x/(+e.dataset.e-+e.dataset.c)*100)+'%';else e.textContent=x>0?left(+e.dataset.e):'expired'});const w=$('#w');if(w){const W=['vanish','expire','self-destruct','disappear','burn'];w.textContent=W[(W.indexOf(w.textContent)+1)%W.length];w.style.animation='none';w.offsetHeight;w.style.animation=''}},1000);
 const toast=(m,bad)=>{const t=document.createElement('div');t.className='toast'+(bad?' bad':'');t.textContent=m;document.body.append(t);setTimeout(()=>t.remove(),3500)};
-async function boot(){const m=location.pathname.match(/^\/d\/([\w-]+)/);if(m)return recv(m[1]);try{await api('/api/me');dash()}catch{login()}}
+async function boot(){const m=location.pathname.match(/^\/d\/([\w-]+)/);if(m)return recv(m[1]);const v=location.pathname.match(/^\/verify\/([\w-]+)/);if(v)return verifyPage(v[1]);try{await api('/api/me');dash()}catch{login()}}
 let mode='in';
 const EM=/^[a-z0-9](?:[a-z0-9._%+-]{0,62}[a-z0-9])?@(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,24}$/i;
 const FEAT='<div class=feat><div class=card>⏳<b>Auto-expiry</b><small>Links die in 1h–7d</small></div><div class=card>🔥<b>Burn after N</b><small>Cap downloads per link</small></div><div class=card>🔐<b>Hashed tokens</b><small>Leaked DB ≠ leaked links</small></div><div class=card>🛡️<b>Safe files</b><small>Magic-byte scanning</small></div></div>';
@@ -24,7 +24,12 @@ function login(){const su=mode=='up';
   if(!EM.test(em)||em.includes('..'))return er('Enter a valid email address (like name@domain.com)');
   if(su){if(pw.length<8||pw.length>72)return er('Password must be 8–72 characters');if(!/[a-z]/i.test(pw)||!/\d/.test(pw))return er('Password needs at least one letter and one number');if(pw!==$('#c').value)return er('Passwords do not match')}
   else if(!pw)return er('Enter your password');
-  const b=$('#go');b.disabled=true;try{await api('/api/'+(su?'register':'login'),J({email:em,password:pw}));boot()}catch(x){er(x.message);b.disabled=false}}}
+  const b=$('#go');b.disabled=true;try{await api('/api/'+(su?'register':'login'),J({email:em,password:pw}));su?pending(em):boot()}catch(x){if(!su&&x.status==403)return pending(em);er(x.message);b.disabled=false}}}
+function pending(em){app.innerHTML=`<section class="card hero"><div class=ghost>📬</div><h2>Check your inbox</h2><p class=mut>We sent a confirmation link to <b>${esc(em)}</b>. It expires in 24 hours — check spam too.</p><button id=rs class=alt>Resend email</button><p class=mut><a href=# id=bk>Back to login</a></p></section>`;
+ const b=$('#rs');b.onclick=async()=>{b.disabled=true;try{await api('/api/resend',J({email:em}));toast('Email sent')}catch(x){toast(x.message,1)}let n=60;const iv=setInterval(()=>{b.textContent=n>0?`Resend in ${n--}s`:'Resend email';if(n<0){clearInterval(iv);b.disabled=false}},1000)};
+ $('#bk').onclick=e=>{e.preventDefault();mode='in';login()}}
+function verifyPage(t){app.innerHTML='<section class="card hero"><div class=ghost>📬</div><h2>Confirm your email</h2><p class=mut>One click and your account is live.</p><button id=cf>Confirm email</button></section>';
+ $('#cf').onclick=async()=>{try{await api('/api/verify',J({token:t}));history.replaceState(null,'','/');toast('Email confirmed 🎉');boot()}catch(x){$('.hero').innerHTML=`<div class="ghost fade">👻</div><h2>Link invalid</h2><p class=mut>${esc(x.message)}</p><p><a href=/>Back to Ghostdrop</a></p>`}}}
 async function dash(){const me=await api('/api/me'),files=await api('/api/files');
  app.innerHTML=`<header><h2>👻 Ghostdrop</h2><span class=mut>${esc(me.email)} <button class=alt id=lo>Log out</button></span></header>
  <div class=stats><div><b>${files.length}</b>files</div><div><b>${files.reduce((a,f)=>a+f.links.filter(l=>l.state=='active').length,0)}</b>live links</div><div><b>${files.reduce((a,f)=>a+f.links.reduce((b,l)=>b+l.downloads,0),0)}</b>downloads</div></div>
