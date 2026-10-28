@@ -29,4 +29,4 @@ Upload: auth → multer (memory, hard 10 MB cap) → type/magic-byte/quota check
 3. Env vars: `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`, `JWT_SECRET=<long random>`, `NODE_ENV=production`.
 4. Free Render sleeps after ~15 min idle (first load ~30–60 s). Optional: free UptimeRobot ping on `/healthz` every 5 min.
 
-Live URL: _add here_
+Live URL: https://ghostdrop-g2p4.onrender.com
